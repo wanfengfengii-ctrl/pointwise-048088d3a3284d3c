@@ -2,6 +2,7 @@ from uuid import uuid4
 
 from archive.codec import ArtifactPayload, decode_artifact, encode_artifact
 from archive.storage import ArchiveStore
+from freeze.bilinear import BilinearModel
 from freeze.evidence import ContourEvidence
 
 
@@ -12,10 +13,14 @@ class PublishAborted(RuntimeError):
 
 
 def publish_artifact(
-    archive: ArchiveStore, evidence: ContourEvidence, *, fail_before_commit: bool = False
+    archive: ArchiveStore,
+    evidence: ContourEvidence,
+    *,
+    fail_before_commit: bool = False,
+    model: BilinearModel | None = None,
 ) -> str:
     artifact_id = 'a-' + uuid4().hex
-    carrier = encode_artifact(ArtifactPayload(artifact_id, evidence))
+    carrier = encode_artifact(ArtifactPayload(artifact_id, evidence, model))
     decode_artifact(carrier)
     with archive.write_transaction():
         archive.insert_artifact(artifact_id, evidence.revision_id, carrier)

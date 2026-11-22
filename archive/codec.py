@@ -3,6 +3,8 @@ import json
 from collections import defaultdict
 from dataclasses import dataclass
 
+from freeze.bilinear import BilinearModel, model_record, parse_model
+from freeze.cell_topology import classify_cell
 from freeze.edge_crossings import crossing_from_record, crossing_to_record, grid_edge
 from freeze.evidence import EDGE_ORDER, CellSection, ContourEvidence, section_sort_key
 
@@ -11,12 +13,23 @@ from freeze.evidence import EDGE_ORDER, CellSection, ContourEvidence, section_so
 class ArtifactPayload:
     artifact_id: str
     evidence: ContourEvidence
+    model: BilinearModel | None = None
 
 
 def canonical_json(value: object) -> bytes:
     return json.dumps(
         value, sort_keys=True, separators=(',', ':'), ensure_ascii=True, allow_nan=False
     ).encode('ascii')
+
+
+def _section_records(sections: tuple[CellSection, ...]) -> list:
+    return [
+        {
+            'cell': [section.row, section.col],
+            'ports': [[side, crossing_to_record(crossing)] for side, crossing in section.ports],
+        }
+        for section in sections
+    ]
 
 
 def encode_artifact(payload: ArtifactPayload) -> bytes:
@@ -28,15 +41,21 @@ def encode_artifact(payload: ArtifactPayload) -> bytes:
         'threshold2': evidence.threshold2,
         'rows': evidence.rows,
         'cols': evidence.cols,
-        'sections': [
-            {
-                'cell': [section.row, section.col],
-                'ports': [[side, crossing_to_record(crossing)] for side, crossing in section.ports],
-            }
-            for section in evidence.sections
-        ],
+        'sections': _section_records(evidence.sections),
     }
+    if payload.model is not None:
+        body['version'] = 2
+        body['model'] = model_record(payload.model)
     return canonical_json({'body': body, 'sha256': hashlib.sha256(canonical_json(body)).hexdigest()})
+
+
+def regenerate_sections(model: BilinearModel, threshold2: int) -> tuple[CellSection, ...]:
+    """按原加工规则从模型重算整张段表。"""
+    sections = []
+    for row in range(model.rows):
+        for col in range(model.cols):
+            sections.extend(classify_cell(row, col, model.cell_corners(row, col), threshold2))
+    return tuple(sections)
 
 
 def _read_section(record: object, rows: int, cols: int) -> CellSection:
@@ -100,12 +119,15 @@ def decode_artifact(carrier: bytes) -> ArtifactPayload:
     body = envelope['body']
     if hashlib.sha256(canonical_json(body)).hexdigest() != envelope['sha256']:
         raise ValueError('artifact checksum mismatch')
-    if not isinstance(body, dict) or body.keys() != {
-        'version', 'artifact_id', 'revision_id', 'threshold2', 'rows', 'cols', 'sections'
-    }:
+    if not isinstance(body, dict):
         raise ValueError('invalid artifact body')
-    if type(body['version']) is not int or body['version'] != 1:
+    common = {'version', 'artifact_id', 'revision_id', 'threshold2', 'rows', 'cols', 'sections'}
+    if body.keys() not in (common, common | {'model'}):
+        raise ValueError('invalid artifact body')
+    if type(body['version']) is not int or body['version'] not in (1, 2):
         raise ValueError('unsupported artifact version')
+    if (body['version'] == 2) != ('model' in body):
+        raise ValueError('artifact version does not match its body fields')
 
     artifact_id, revision_id = body['artifact_id'], body['revision_id']
     if any(not isinstance(value, str) or not value for value in (artifact_id, revision_id)):
@@ -118,4 +140,11 @@ def decode_artifact(carrier: bytes) -> ArtifactPayload:
         raise ValueError('invalid artifact threshold')
 
     sections = _read_sections(body['sections'], rows, cols)
-    return ArtifactPayload(artifact_id, ContourEvidence(revision_id, threshold2, rows, cols, sections))
+    evidence = ContourEvidence(revision_id, threshold2, rows, cols, sections)
+    if body['version'] == 1:
+        return ArtifactPayload(artifact_id, evidence)
+
+    model = parse_model(body['model'], rows, cols)
+    if regenerate_sections(model, threshold2) != sections:
+        raise ValueError('segment table does not match the sealed model')
+    return ArtifactPayload(artifact_id, evidence, model)

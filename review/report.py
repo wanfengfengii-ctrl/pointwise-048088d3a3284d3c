@@ -8,6 +8,13 @@ from review.ports import SectionRef, index_ports
 from review.stitch import stitch_sections
 
 
+def audit_probe(carrier: bytes, start, end) -> tuple:
+    """离线检尺的公开入口；实现只消费可领取的新包字节。"""
+    from review.probe import audit_probe as _audit_probe
+
+    return _audit_probe(carrier, start, end)
+
+
 @dataclass(frozen=True)
 class AuditReport:
     artifact_id: str

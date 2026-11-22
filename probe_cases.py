@@ -130,6 +130,41 @@ def verify_probe():
         audit_probe(invalid, *HORIZONTAL)
 
 
+def demo():
+    from freeze.assemble import freeze_probe_contour
+    from review.report import audit_probe
+
+    cases = (
+        ("two_branches", SAMPLES["two_branches"], DIAGONAL,
+         ((LOWER, LOWER, 0), (UPPER, UPPER, 1))),
+        ("four_arms", SAMPLES["four_arms"], DIAGONAL, ((HALF, HALF, 0),)),
+        ("tangent", SAMPLES["tangent"], ((0, 1), (1, 0)), ((HALF, HALF, 0),)),
+        ("seam", SAMPLES["seam"], ((0, HALF), (2, HALF)), ((F(0), F(1), 0),)),
+    )
+    with TemporaryDirectory(prefix="kiln-probe-demo-") as temporary:
+        database = Path(temporary) / "kiln.sqlite3"
+        with closing(sqlite3.connect(database)) as connection:
+            intake, archive, _ = open_stores(connection)
+            ids, carriers, revisions = {}, {}, {}
+            for name, (vertices, threshold), _, _ in cases:
+                revisions[name] = ingest_grid(intake, "kiln-demo", vertices)
+                ids[name] = freeze_probe_contour(intake, archive, revisions[name], threshold)
+                carriers[name] = pickup_artifact(archive, ids[name])
+            # 设备源停用后旧成果仍可领取。
+            disable_source(intake, revisions["two_branches"])
+
+        with closing(sqlite3.connect(database)) as connection:
+            _, archive, _ = open_stores(connection)
+            reopened = {name: pickup_artifact(archive, identity) for name, identity in ids.items()}
+        CHECK.assertEqual(reopened, carriers)
+
+        # 连接已全部关闭，以下只用成果字节。
+        for name, _, endpoints, expected in cases:
+            actual = audit_probe(reopened[name], *endpoints)
+            CHECK.assertEqual(actual, expected, name)
+            print(f"POINTWISE_PROBE {name} {endpoints[0]!r}->{endpoints[1]!r}: {actual!r}")
+
+
 def main():
     parser = ArgumentParser()
     parser.add_argument("mode", choices=("baseline", "verify", "demo"))
@@ -141,7 +176,9 @@ def main():
         suite = unittest.defaultTestLoader.discover("tests")
         if not unittest.TextTestRunner().run(suite).wasSuccessful():
             raise SystemExit(1)
-    verify_probe()
+        verify_probe()
+        return
+    demo()
 
 
 if __name__ == "__main__":

@@ -1,5 +1,6 @@
 from archive.publish import publish_artifact
 from archive.storage import ArchiveStore
+from freeze.bilinear import model_from_grid
 from freeze.cell_topology import classify_cell
 from freeze.evidence import ContourEvidence, parse_half_threshold
 from intake.revisions import GridRevision
@@ -29,3 +30,21 @@ def freeze_contour(
     revision = load_processable_revision(intake, revision_id)
     evidence = assemble_evidence(revision, threshold2)
     return publish_artifact(archive, evidence, fail_before_commit=fail_before_commit)
+
+
+def freeze_probe_contour(
+    intake: IntakeStore,
+    archive: ArchiveStore,
+    revision_id: str,
+    threshold: object,
+    *,
+    fail_before_commit: bool = False,
+) -> str:
+    """封存 v2 成果：原段表加同一修订的精确双线性模型。"""
+    threshold2 = parse_half_threshold(threshold)
+    revision = load_processable_revision(intake, revision_id)
+    evidence = assemble_evidence(revision, threshold2)
+    model = model_from_grid(revision.grid)
+    return publish_artifact(
+        archive, evidence, fail_before_commit=fail_before_commit, model=model
+    )
